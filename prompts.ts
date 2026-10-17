@@ -46,6 +46,10 @@ function renderSkills(skills: SkillSummary[]): string {
 export interface PromptInputs {
 	memory: string;
 	skills: SkillSummary[];
+	/** When false, every memory reference is omitted from the prompt (tool is not offered). */
+	memoryEnabled?: boolean;
+	/** User-configured memory policy; rendered above the current memory contents when non-empty. */
+	memoryGuidance?: string;
 }
 
 export function memoryReviewPrompt(inputs: PromptInputs): string {
@@ -98,21 +102,31 @@ ${FORMAT}`;
 }
 
 export function combinedReviewPrompt(inputs: PromptInputs): string {
-	return `${HEADER}
+	const memoryEnabled = inputs.memoryEnabled !== false;
+	const header = memoryEnabled
+		? HEADER
+		: HEADER.replace("- Be conservative on memory. Most sessions produce nothing for that surface.\n", "");
+	const memoryBullet = memoryEnabled
+		? "\n- `memory` — edit `~/.pi/memory.md`. Use for a **stable user preference or convention** that will shape every future session (e.g. language, tooling, style). Do not use for knowledge insights or session narratives."
+		: "";
+	const memoryRouteRow = memoryEnabled ? "\n| Stable user preference / convention | memory |" : "";
+	const guidance = (inputs.memoryGuidance ?? "").trim();
+	const memoryContentsBlock = memoryEnabled
+		? `${guidance.length > 0 ? `Memory policy (user-configured):\n${guidance}\n\n` : ""}Current memory contents:\n<<<MEMORY\n${inputs.memory.trim().length > 0 ? inputs.memory : "(empty)"}\nMEMORY>>>\n`
+		: "";
+	return `${header}
 
-You have six tools. Route to the right surface — do not duplicate across surfaces:
+You have ${memoryEnabled ? "six" : "five"} tools. Route to the right surface — do not duplicate across surfaces:
 
 - \`pi_journal\` — append a session entry to \`~/.pi/reflect/journal.jsonl\`. **Primary session record — no vault required.** Write terse: fragments OK, drop articles/filler, arrows for causality (X → Y). Full technical precision, minimal prose. Exception: \`decisions\` field — keep rationale in full sentences, that\'s the most valuable thing to preserve. Include specific file paths. Use for every substantive session.
-- \`vault_daily\` — append a **summarized** session block to today's vault daily note (\`~/vault/Daily/\`). Human-facing, shorter than \`pi_journal\`. The tool skips gracefully if the vault doesn't exist. Write a concise summary: focus, key bullets, decisions, open items. Use alongside \`pi_journal\` for every substantive session.
-- \`memory\` — edit \`~/.pi/memory.md\`. Use for a **stable user preference or convention** that will shape every future session (e.g. language, tooling, style). Do not use for knowledge insights or session narratives.
+- \`vault_daily\` — append a **summarized** session block to today's vault daily note (\`~/vault/Daily/\`). Human-facing, shorter than \`pi_journal\`. The tool skips gracefully if the vault doesn't exist. Write a concise summary: focus, key bullets, decisions, open items. Use alongside \`pi_journal\` for every substantive session.${memoryBullet}
 - \`skill_manage\` — manage skills under \`~/.pi/skills/\`. Be **active** — most sessions produce at least one skill update. Signals that warrant action (any one qualifies): the user corrected the agent's style, tone, format, verbosity, or approach (frustration signals like "stop doing X", "too verbose", "don't format like this" are **first-class skill signals** — embed the fix in the skill governing that task so the next session starts already knowing); the agent worked out a non-trivial technique, fix, or workaround; a skill was consulted this session and turned out wrong or incomplete — patch it now. Prefer this update order: (1) patch a skill already loaded/consulted this session, (2) patch an existing skill whose scope covers the learning, (3) add a \`references/<topic>.md\` support file to an existing skill via \`action=write_file\`, (4) create a new class-level skill only when nothing existing fits. Do NOT capture: environment-dependent failures; negative capability claims ("X doesn't work" — these harden into permanent refusals); one-off task narratives. "Nothing to update" is real but not the default. Skills marked with " * " are protected.
 - \`vault_pending\` — propose an item to \`~/vault/_pending/\` for the user to route into the knowledge graph. Use for: a knowledge insight that enriches a vault topic (type: semantic), a research question or good idea that came up but wasn't pursued this session (type: lead), or a specific external source to run through content-synthesis (type: source). **Lead is the most important type to be generous with** — ideas mentioned in passing and set aside are exactly what gets lost between sessions. **Before proposing anything, call \`vault_pending\` with \`action=list\` first** — do not re-propose items already pending or substantially the same idea under a different slug.
 - \`vault_source\` — append directly to \`Intelligence/sources-to-capture.md\`. Use only for clear, unambiguous source references (a URL, a book title, a paper) that don't need human routing — low-risk additive write.
 
 Surface selection guide:
 | What the session produced | Tool |
-|---|---|
-| Stable user preference / convention | memory |
+|---|---|${memoryRouteRow}
 | Reusable technique or agent recipe | skill_manage |
 | User correction to agent style or approach | skill_manage |
 | Skill consulted this session that was wrong/incomplete | skill_manage (patch it) |
@@ -130,11 +144,7 @@ Substantive session definition (any one qualifies for both journal tools):
 - New people, tools, projects, or external references came up
 - The user asked you to remember something
 
-Current memory contents:
-<<<MEMORY
-${inputs.memory.trim().length > 0 ? inputs.memory : "(empty)"}
-MEMORY>>>
-
+${memoryContentsBlock}
 Available skills:
 ${renderSkills(inputs.skills)}
 

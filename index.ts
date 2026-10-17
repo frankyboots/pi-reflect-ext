@@ -165,14 +165,16 @@ async function dispatchReview(
 }
 
 export default function piReflect(pi: ExtensionAPI): void {
-	pi.registerTool(memoryTool);
+	// Settings load first: the `memory` key gates tool registration below,
+	// and registration is startup-only (a session toggle cannot un-advertise).
+	refreshSettings();
+
+	if (loadSettings().memory) pi.registerTool(memoryTool);
 	pi.registerTool(createSkillManageTool(() => protectedConfig));
 	pi.registerTool(vaultPendingTool);
 	pi.registerTool(piJournalTool);
 	pi.registerTool(vaultDailyTool);
 	pi.registerTool(vaultSourceTool);
-
-	refreshSettings();
 
 	pi.on("session_start", () => {
 		invalidateMemoryCache();
@@ -187,6 +189,7 @@ export default function piReflect(pi: ExtensionAPI): void {
 	});
 
 	pi.on("before_agent_start", (event) => {
+		if (!loadSettings().memory) return;
 		const memory = loadMemory();
 		if (memory.trim().length === 0) return;
 		return { systemPrompt: injectMemoryIntoSystemPrompt(event.systemPrompt, memory) };

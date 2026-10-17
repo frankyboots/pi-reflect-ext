@@ -17,6 +17,7 @@ import { loadMemory } from "./memory.ts";
 import { combinedReviewPrompt, type SkillSummary } from "./prompts.ts";
 import { isSkillProtected, type ProtectedSkillsConfig } from "./protected.ts";
 import { getSkillsRoot, resolveSkillFile } from "./safe-path.ts";
+import { loadSettings } from "./settings.ts";
 import { type EditRecord, summarizeEdits } from "./summarize.ts";
 import { memoryTool } from "./tools/memory.ts";
 import { piJournalTool } from "./tools/pi-journal.ts";
@@ -58,13 +59,19 @@ export async function runBackgroundReview(
 	const messagesSnapshot = captureMessages(ctx);
 	if (messagesSnapshot.length === 0) return { ...empty, skipped: "no_messages" };
 
-	const memoryText = safeLoadMemory();
+	const settings = loadSettings();
+	const memoryText = settings.memory ? safeLoadMemory() : "";
 	const skills = listSkillSummaries(protectedConfig);
-	const promptText = combinedReviewPrompt({ memory: memoryText, skills });
+	const promptText = combinedReviewPrompt({
+		memory: memoryText,
+		skills,
+		memoryEnabled: settings.memory,
+		memoryGuidance: settings.memoryGuidance,
+	});
 
 	const systemPrompt = ctx.getSystemPrompt();
 	const tools: AgentTool[] = [
-		toAgentTool(memoryTool, ctx),
+		...(settings.memory ? [toAgentTool(memoryTool, ctx)] : []),
 		toAgentTool(piJournalTool, ctx),
 		toAgentTool(createSkillManageTool(() => protectedConfig), ctx),
 		toAgentTool(vaultPendingTool, ctx),

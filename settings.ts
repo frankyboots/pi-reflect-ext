@@ -15,6 +15,10 @@ export interface ReflectSettings {
 	protectedSkills: string[];
 	batchSize: number;
 	vaultPath: string;
+	/** Master switch for the memory surface: injection, tool registration, and reviewer access. */
+	memory: boolean;
+	/** Free-text policy appended to the reviewer prompt above the current memory contents. Empty = omitted. */
+	memoryGuidance: string;
 }
 
 const DEFAULT_SETTINGS: ReflectSettings = {
@@ -22,6 +26,8 @@ const DEFAULT_SETTINGS: ReflectSettings = {
 	protectedSkills: [],
 	batchSize: 5,
 	vaultPath: "",
+	memory: true,
+	memoryGuidance: "",
 };
 
 function settingsPath(): string {
@@ -34,6 +40,8 @@ interface SettingsFileShape {
 		protectedSkills?: unknown;
 		batchSize?: unknown;
 		vaultPath?: unknown;
+		memory?: unknown;
+		memoryGuidance?: unknown;
 	};
 }
 
@@ -68,7 +76,10 @@ export function loadSettings(): ReflectSettings {
 		const protectedSkills = parseProtectedSkills(section.protectedSkills);
 		const batchSize = parseBatchSize(section.batchSize);
 		const vaultPath = typeof section.vaultPath === "string" ? section.vaultPath : DEFAULT_SETTINGS.vaultPath;
-		cache = { mode, protectedSkills, batchSize, vaultPath };
+		const memory = typeof section.memory === "boolean" ? section.memory : DEFAULT_SETTINGS.memory;
+		const memoryGuidance =
+			typeof section.memoryGuidance === "string" ? section.memoryGuidance : DEFAULT_SETTINGS.memoryGuidance;
+		cache = { mode, protectedSkills, batchSize, vaultPath, memory, memoryGuidance };
 		return cache;
 	} catch (err) {
 		const code = (err as NodeJS.ErrnoException).code;

@@ -155,6 +155,8 @@ Protected skills cannot be overwritten. See "Protecting skills" below.
 | `mode` | `"off"` \| `"session"` \| `"turn"` | `"session"` | Reviewer trigger. |
 | `batchSize` | `number` | `5` | In `batch` mode, how many agent runs to accumulate before firing a review. Must be a positive integer. |
 | `protectedSkills` | `string[]` | `[]` | Skill names the reviewer (and any agent) cannot overwrite. |
+| `memory` | `boolean` | `true` | Master switch for the memory surface. When `false`: no `<persistent_memory>` injection, the `memory` tool is not registered, the background reviewer does not get the tool, and memory guidance/contents are omitted from the reviewer prompt. Takes effect at startup (tool registration is not re-evaluated mid-session). |
+| `memoryGuidance` | `string` | `""` | Free-text policy appended to the reviewer prompt above the current memory contents (e.g. "memory is an index, not a store — pointers for declarative facts, inline only behavioral triggers"). Empty = section omitted. Reviewer-only; the foreground agent does not see it. |
 
 Settings are read at every `session_start`. Edit the file and restart pi to
 pick up changes — except for `mode`, which you can also flip live via
