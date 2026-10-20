@@ -1,7 +1,9 @@
 import * as fs from "node:fs";
 import { atomicWriteFile } from "./atomic-write.ts";
 import { withFileLockSync } from "./file-lock.ts";
+import type { TruncationReason } from "./lib/limits.ts";
 import { getReflectStateDir, getStatePath } from "./safe-path.ts";
+import type { MemoryByteSpan } from "./summarize.ts";
 
 export type SkipReason = "no_model" | "no_api_key" | "no_messages" | "in_flight" | "aborted";
 
@@ -23,6 +25,8 @@ export interface LastRun {
 	summary: string | null;
 	durationMs: number;
 	truncated: boolean;
+	truncatedReason?: TruncationReason;
+	turns?: number;
 	errorMessage?: string;
 	skipped?: SkipReason;
 }
@@ -117,6 +121,12 @@ export interface RunSummary {
 	memoryEdits: number;
 	skillEdits: number;
 	truncated: boolean;
+	/** Which limit ended the run; absent when the reviewer stopped on its own. */
+	truncatedReason?: TruncationReason;
+	/** Model turns consumed by the run. */
+	turns?: number;
+	/** `memory.md` size before/after the run, when it wrote memory at all. */
+	memoryBytes?: MemoryByteSpan;
 	errorMessage?: string;
 	skipped?: SkipReason;
 }
@@ -151,6 +161,8 @@ export function recordRun(run: RunSummary): ReflectState {
 			summary: run.summary,
 			durationMs: run.endedAt - run.startedAt,
 			truncated: run.truncated,
+			truncatedReason: run.truncatedReason,
+			turns: run.turns,
 			errorMessage: run.errorMessage,
 			skipped: run.skipped,
 		},
@@ -191,7 +203,8 @@ export function formatStatus(state: ReflectState): string {
 		lines.push(`  duration:  ${lr.durationMs} ms`);
 		lines.push(`  status:    ${status}`);
 		if (lr.summary) lines.push(`  summary:   ${lr.summary}`);
-		if (lr.truncated) lines.push(`  truncated: yes`);
+		if (lr.truncated) lines.push(`  truncated: yes${lr.truncatedReason ? ` (${lr.truncatedReason})` : ""}`);
+		if (lr.turns !== undefined) lines.push(`  turns:     ${lr.turns}`);
 		if (lr.errorMessage) lines.push(`  error:     ${lr.errorMessage}`);
 	} else {
 		lines.push("");

@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { DEFAULT_REVIEW_LIMITS, parseReviewMaxTurns, parseReviewTimeoutMs } from "./lib/limits.ts";
 import { getReflectHome } from "./safe-path.ts";
 
 export type ReflectMode = "off" | "session" | "batch";
@@ -19,6 +20,16 @@ export interface ReflectSettings {
 	memory: boolean;
 	/** Free-text policy appended to the reviewer prompt above the current memory contents. Empty = omitted. */
 	memoryGuidance: string;
+	/** How long one review may run before it is aborted. */
+	reviewTimeoutMs: number;
+	/** How many model turns one review may take before it is stopped. */
+	reviewMaxTurns: number;
+	/**
+	 * Set when `settings.json` existed but could not be read or parsed, in which
+	 * case every value above is a default. Surfaced by `/reflect status` so a
+	 * typo in the file cannot masquerade as "my setting took effect".
+	 */
+	settingsError?: string;
 }
 
 const DEFAULT_SETTINGS: ReflectSettings = {
@@ -28,6 +39,8 @@ const DEFAULT_SETTINGS: ReflectSettings = {
 	vaultPath: "",
 	memory: true,
 	memoryGuidance: "",
+	reviewTimeoutMs: DEFAULT_REVIEW_LIMITS.timeoutMs,
+	reviewMaxTurns: DEFAULT_REVIEW_LIMITS.maxTurns,
 };
 
 function settingsPath(): string {
@@ -42,6 +55,8 @@ interface SettingsFileShape {
 		vaultPath?: unknown;
 		memory?: unknown;
 		memoryGuidance?: unknown;
+		reviewTimeoutMs?: unknown;
+		reviewMaxTurns?: unknown;
 	};
 }
 
@@ -79,15 +94,30 @@ export function loadSettings(): ReflectSettings {
 		const memory = typeof section.memory === "boolean" ? section.memory : DEFAULT_SETTINGS.memory;
 		const memoryGuidance =
 			typeof section.memoryGuidance === "string" ? section.memoryGuidance : DEFAULT_SETTINGS.memoryGuidance;
-		cache = { mode, protectedSkills, batchSize, vaultPath, memory, memoryGuidance };
+		const reviewTimeoutMs = parseReviewTimeoutMs(section.reviewTimeoutMs);
+		const reviewMaxTurns = parseReviewMaxTurns(section.reviewMaxTurns);
+		cache = {
+			mode,
+			protectedSkills,
+			batchSize,
+			vaultPath,
+			memory,
+			memoryGuidance,
+			reviewTimeoutMs,
+			reviewMaxTurns,
+		};
 		return cache;
 	} catch (err) {
 		const code = (err as NodeJS.ErrnoException).code;
+		// No file at all is the normal state: defaults, nothing to report.
 		if (code === "ENOENT") {
 			cache = { ...DEFAULT_SETTINGS };
 			return cache;
 		}
-		cache = { ...DEFAULT_SETTINGS };
+		// A file that exists but will not parse is not normal, and silently
+		// running on defaults would make a broken setting look like an applied
+		// one. Keep the defaults, record why, and let `/reflect status` say so.
+		cache = { ...DEFAULT_SETTINGS, settingsError: err instanceof Error ? err.message : String(err) };
 		return cache;
 	}
 }

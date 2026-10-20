@@ -1,9 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { withFileLockSync } from "./file-lock.ts";
+import type { TruncationReason } from "./lib/limits.ts";
 import { getReflectStateDir } from "./safe-path.ts";
 import type { ReflectMode } from "./settings.ts";
 import type { RunSummary } from "./state.ts";
+import type { MemoryByteSpan } from "./summarize.ts";
 
 export interface AuditEntry {
 	ts: string;
@@ -14,6 +16,15 @@ export interface AuditEntry {
 	memoryEdits: number;
 	skillEdits: number;
 	truncated: boolean;
+	/** Which limit ended the run, so `truncated` can be told apart from itself:
+	 *  `timeout` means the reviewer needed more time, `turns` means it kept
+	 *  chaining tool calls, `both` means the wall arrived as it hit the cap. */
+	truncatedReason?: TruncationReason;
+	/** Model turns consumed. Read alongside `truncatedReason` to tell a reviewer
+	 *  that ran out of clock from one that ran out of patience. */
+	turns?: number;
+	/** `memory.md` before/after this run, when it wrote memory. */
+	memoryBytes?: MemoryByteSpan;
 	skipped?: string;
 	errorMessage?: string;
 }
@@ -32,6 +43,9 @@ export function appendAudit(run: RunSummary, mode: ReflectMode, trigger: AuditEn
 		memoryEdits: run.memoryEdits,
 		skillEdits: run.skillEdits,
 		truncated: run.truncated,
+		truncatedReason: run.truncatedReason,
+		turns: run.turns,
+		memoryBytes: run.memoryBytes,
 		skipped: run.skipped,
 		errorMessage: run.errorMessage,
 	};

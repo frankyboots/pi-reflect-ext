@@ -38,6 +38,41 @@ interface VaultSourceDetails {
 	entry?: string;
 }
 
+interface MemoryDetails {
+	bytesBefore?: number;
+	bytesAfter?: number;
+}
+
+function isMemoryDetails(value: unknown): value is MemoryDetails {
+	return typeof value === "object" && value !== null;
+}
+
+/** Net `memory.md` size for a run: size before its first successful `memory`
+ *  call, size after its last. Null when the run touched memory not at all —
+ *  "no writes" and "no size change" are different facts. */
+export interface MemoryByteSpan {
+	from: number;
+	to: number;
+}
+
+export function memoryByteSpan(edits: EditRecord[]): MemoryByteSpan | null {
+	let from: number | undefined;
+	let to: number | undefined;
+	const seen = new Set<string>();
+	for (const edit of edits) {
+		if (seen.has(edit.toolCallId)) continue;
+		seen.add(edit.toolCallId);
+		if (edit.toolName !== "memory" || !isMemoryDetails(edit.details)) continue;
+		const before = edit.details.bytesBefore;
+		const after = edit.details.bytesAfter;
+		if (typeof before !== "number" || typeof after !== "number") continue;
+		if (from === undefined) from = before;
+		to = after;
+	}
+	if (from === undefined || to === undefined) return null;
+	return { from, to };
+}
+
 function isVaultDailyDetails(value: unknown): value is VaultDailyDetails {
 	return typeof value === "object" && value !== null;
 }
@@ -65,7 +100,11 @@ export function summarizeEdits(edits: EditRecord[]): string | null {
 
 		if (edit.toolName === "memory") {
 			if (!memoryReported) {
-				parts.push("Memory updated");
+				// Carry the byte delta in the one live signal the human sees, so
+				// "memory grew again" is readable at the end of a session rather
+				// than something a prune pass discovers weeks later.
+				const span = memoryByteSpan(edits);
+				parts.push(span ? `Memory updated (${span.from} → ${span.to} B)` : "Memory updated");
 				memoryReported = true;
 			}
 			continue;

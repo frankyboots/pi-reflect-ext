@@ -70,6 +70,9 @@ function toRunSummary(result: BackgroundReviewResult, startedAt: number, endedAt
 		memoryEdits,
 		skillEdits,
 		truncated: result.truncated,
+		truncatedReason: result.truncatedReason,
+		turns: result.turns,
+		memoryBytes: result.memoryBytes,
 		errorMessage: result.errorMessage,
 		skipped: result.skipped,
 	};
@@ -261,7 +264,19 @@ export default function piReflect(pi: ExtensionAPI): void {
 			if (trimmed === "" || trimmed === "status") {
 				const state = loadState();
 				const settings = loadSettings();
-				const content = `${formatStatus(state)}\n\nmode:            ${settings.mode}\nprotected skills: ${settings.protectedSkills.length === 0 ? "(none)" : settings.protectedSkills.join(", ")}`;
+				const lines = [
+					formatStatus(state),
+					``,
+					`mode:            ${settings.mode}`,
+					`review limits:   ${settings.reviewTimeoutMs} ms / ${settings.reviewMaxTurns} turns`,
+					`protected skills: ${settings.protectedSkills.length === 0 ? "(none)" : settings.protectedSkills.join(", ")}`,
+				];
+				// A settings.json that will not parse yields defaults, which would
+				// otherwise look exactly like the file having been honoured.
+				if (settings.settingsError) {
+					lines.push(`settings.json:   UNREADABLE (${settings.settingsError}) — running on defaults`);
+				}
+				const content = lines.join("\n");
 				pi.sendMessage({
 					customType: "reflect.status.show",
 					content,

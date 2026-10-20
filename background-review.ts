@@ -13,12 +13,13 @@ import {
 	type ExtensionContext,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { truncationReason, type TruncationReason } from "./lib/limits.ts";
 import { loadMemory } from "./memory.ts";
 import { combinedReviewPrompt, type SkillSummary } from "./prompts.ts";
 import { isSkillProtected, type ProtectedSkillsConfig } from "./protected.ts";
 import { getSkillsRoot, resolveSkillFile } from "./safe-path.ts";
 import { loadSettings } from "./settings.ts";
-import { type EditRecord, summarizeEdits } from "./summarize.ts";
+import { memoryByteSpan, type EditRecord, type MemoryByteSpan, summarizeEdits } from "./summarize.ts";
 import { memoryTool } from "./tools/memory.ts";
 import { piJournalTool } from "./tools/pi-journal.ts";
 import { createSkillManageTool } from "./tools/skill-manage.ts";
@@ -26,14 +27,17 @@ import { vaultDailyTool } from "./tools/vault-daily.ts";
 import { vaultPendingTool } from "./tools/vault-pending.ts";
 import { vaultSourceTool } from "./tools/vault-source.ts";
 
-const REVIEW_TIMEOUT_MS = 60_000;
-const MAX_TURNS = 16;
-
 export interface BackgroundReviewResult {
 	summary: string | null;
 	edits: EditRecord[];
 	skipped?: "no_model" | "no_api_key" | "no_messages" | "aborted";
 	truncated: boolean;
+	/** Which limit ended the run. Absent when the reviewer stopped on its own. */
+	truncatedReason?: TruncationReason;
+	/** Model turns consumed, whether or not the run completed. */
+	turns?: number;
+	/** Net memory.md size across this run's `memory` calls, if it made any. */
+	memoryBytes?: MemoryByteSpan;
 	errorMessage?: string;
 }
 
@@ -86,7 +90,7 @@ export async function runBackgroundReview(
 	};
 
 	const abortController = new AbortController();
-	const timeout = setTimeout(() => abortController.abort(), REVIEW_TIMEOUT_MS);
+	const timeout = setTimeout(() => abortController.abort(), settings.reviewTimeoutMs);
 
 	let turnCount = 0;
 	const config: AgentLoopConfig = {
@@ -95,7 +99,7 @@ export async function runBackgroundReview(
 		convertToLlm: (msgs: AgentMessage[]): Message[] => convertToLlm(msgs),
 		shouldStopAfterTurn: async ({ message }) => {
 			turnCount++;
-			if (turnCount >= MAX_TURNS) return true;
+			if (turnCount >= settings.reviewMaxTurns) return true;
 			if (message.role !== "assistant") return true;
 			const hasToolCall = message.content.some((c) => c.type === "toolCall");
 			return !hasToolCall;
@@ -109,7 +113,6 @@ export async function runBackgroundReview(
 	};
 
 	const edits: EditRecord[] = [];
-	let truncated = false;
 	let errorMessage: string | undefined;
 
 	try {
@@ -129,17 +132,23 @@ export async function runBackgroundReview(
 		clearTimeout(timeout);
 	}
 
-	if (abortController.signal.aborted) {
-		truncated = true;
-	}
-	if (turnCount >= MAX_TURNS) {
-		truncated = true;
-	}
+	// Attribute the stop before reporting it. "Needs more time" and "chained too
+	// many tool calls" call for different fixes, and `truncated: true` cannot
+	// tell them apart — that ambiguity is why the old 60 s wall went unnoticed
+	// while it discarded half the journal entries it was supposed to write.
+	const reason = truncationReason({
+		aborted: abortController.signal.aborted,
+		turns: turnCount,
+		maxTurns: settings.reviewMaxTurns,
+	});
 
 	return {
 		summary: summarizeEdits(edits),
 		edits,
-		truncated,
+		truncated: reason !== null,
+		truncatedReason: reason ?? undefined,
+		turns: turnCount,
+		memoryBytes: memoryByteSpan(edits) ?? undefined,
 		errorMessage,
 	};
 }

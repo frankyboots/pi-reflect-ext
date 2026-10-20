@@ -138,29 +138,37 @@ Protected skills cannot be overwritten. See "Protecting skills" below.
 
 ## Settings
 
-`~/.pi/settings.json`:
+`~/.pi/settings.json`, key `"pi-reflect"` — the profile root, *not*
+`~/.pi/reflect/`, which holds only state and the audit log. The file is
+optional; absent means defaults:
 
 ```json
 {
   "pi-reflect": {
     "mode": "session",
-    "turnInterval": 5,
-    "protectedSkills": ["create-skill", "review"]
+    "batchSize": 5,
+    "protectedSkills": ["create-skill", "review"],
+    "reviewTimeoutMs": 180000,
+    "reviewMaxTurns": 48
   }
 }
 ```
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `mode` | `"off"` \| `"session"` \| `"turn"` | `"session"` | Reviewer trigger. |
+| `mode` | `"off"` \| `"session"` \| `"batch"` | `"session"` | Reviewer trigger. |
 | `batchSize` | `number` | `5` | In `batch` mode, how many agent runs to accumulate before firing a review. Must be a positive integer. |
 | `protectedSkills` | `string[]` | `[]` | Skill names the reviewer (and any agent) cannot overwrite. |
 | `memory` | `boolean` | `true` | Master switch for the memory surface. When `false`: no `<persistent_memory>` injection, the `memory` tool is not registered, the background reviewer does not get the tool, and memory guidance/contents are omitted from the reviewer prompt. Takes effect at startup (tool registration is not re-evaluated mid-session). |
 | `memoryGuidance` | `string` | `""` | Free-text policy appended to the reviewer prompt above the current memory contents (e.g. "memory is an index, not a store — pointers for declarative facts, inline only behavioral triggers"). Empty = section omitted. Reviewer-only; the foreground agent does not see it. |
+| `reviewTimeoutMs` | `number` | `180000` | How long one review may run before it is aborted. Accepted range 5000–600000; anything else falls back to the default. Six surfaces in one pass needs more than a minute — see [log.jsonl](#logjsonl). |
+| `reviewMaxTurns` | `number` | `48` | How many model turns one review may take before it is stopped, even if the reviewer keeps calling tools. Accepted range 1–200. |
 
 Settings are read at every `session_start`. Edit the file and restart pi to
 pick up changes — except for `mode`, which you can also flip live via
-`/reflect mode`.
+`/reflect mode`. A file that exists but does not parse yields defaults, and
+`/reflect status` says so (`settings.json: UNREADABLE …`) rather than letting a
+dead setting look like a live one.
 
 ### Protecting skills
 
@@ -219,15 +227,39 @@ jq -r 'select(.skipped != null) | "\(.ts) \(.skipped)"' ~/.pi/reflect/log.jsonl
 Fields:
 
 - `ts` — ISO timestamp of when the run ended.
-- `mode` — `"off"` \| `"session"` \| `"turn"`.
-- `trigger` — `"turn_end"` \| `"agent_end"` \| `"manual"` \| `"session"`.
+- `mode` — `"off"` \| `"session"` \| `"batch"`.
+- `trigger` — `"agent_end"` \| `"manual"` \| `"session"`.
 - `durationMs` — wall time of the reviewer call.
-- `summary` — string or `null`. See [What it does](#what-it-does).
+- `summary` — string or `null`. See [What it does](#what-it-does). A memory write
+  reports its byte delta, e.g. `Memory updated (2708 → 2894 B)`.
 - `memoryEdits`, `skillEdits` — counts of successful tool calls in this run.
-- `truncated` — `true` if the reviewer hit the 16-turn cap or 60s timeout.
+- `truncated` — `true` if the reviewer was stopped rather than finishing.
+- `truncatedReason` — `"timeout"` \| `"turns"` \| `"both"` when truncated, absent
+  otherwise. `timeout` means the run needed more clock (`reviewTimeoutMs`);
+  `turns` means it was still chaining tool calls at `reviewMaxTurns`.
+- `turns` — model turns consumed, so the two failure modes can be told apart.
+- `memoryBytes` — `{ "from": n, "to": n }` when the run wrote `memory.md`.
+  Absent means it did not touch memory at all.
 - `skipped` — `"no_model"` \| `"no_api_key"` \| `"no_messages"` \|
   `"in_flight"` \| `"aborted"` if the run never ran.
 - `errorMessage` — populated if the run crashed.
+
+Did the reviewer get cut off, and did it record the session?
+
+```bash
+# Truncation rate, and which limit fired:
+jq -sr 'map(select(.durationMs > 1000)) as $r
+  | "\([$r[] | select(.truncated)] | length)/\($r | length) truncated; reasons: \([$r[] | .truncatedReason // empty] | group_by(.) | map("\(.[0])=\(length)") | join(", "))"' ~/.pi/reflect/log.jsonl
+
+# Runs that were cut off and never wrote the session journal:
+jq -r 'select(.truncated and ((.summary // "") | test("Session logged") | not)) | .ts' ~/.pi/reflect/log.jsonl
+```
+
+Growth of the injected memory file, review by review:
+
+```bash
+jq -r 'select(.memoryBytes) | "\(.ts) \(.memoryBytes.from) → \(.memoryBytes.to)"' ~/.pi/reflect/log.jsonl
+```
 
 ## How reviews work under the hood
 
@@ -237,9 +269,10 @@ Fields:
    - The full transcript from `sessionManager.getBranch()`, deep-cloned.
 2. It builds a single-shot prompt embedding the transcript, your current
    memory, and the skill list.
-3. It calls `agentLoop()` from `@earendil-works/pi-agent-core` with only
-   the `memory` and `skill_manage` tools available, a 60-second timeout,
-   and a 16-turn cap.
+3. It calls `agentLoop()` from `@earendil-works/pi-agent-core` with the six
+   reviewer tools, aborted at `reviewTimeoutMs` (default 180 s) and capped at
+   `reviewMaxTurns` (default 48 turns). Which limit fired is recorded as
+   `truncatedReason` in [log.jsonl](#logjsonl).
 4. Any successful `memory` or `skill_manage` tool result is collected,
    deduped by `toolCallId`, and summarized as a one-liner.
 5. The summary is reported via `ctx.ui.notify`, the run is recorded in
